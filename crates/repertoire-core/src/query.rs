@@ -185,6 +185,17 @@ impl Rank {
     }
 }
 
+/// How well `name` matches `query` (case-insensitive), the way
+/// [`Tree::search`] ranks it. `None` when it doesn't match. For clients that
+/// search without the daemon and want the same order.
+pub fn rank(query: &str, name: &[u8]) -> Option<Rank> {
+    let q = Query::new(query);
+    if q.is_empty() {
+        return None;
+    }
+    q.rank(name)
+}
+
 /// A lowercased query. ASCII is folded byte by byte, which is what makes a
 /// linear scan over every name fast; non-ASCII names are folded through
 /// `str::to_lowercase` only when the query itself isn't ASCII.
@@ -247,6 +258,12 @@ mod tests {
 
     fn r(name: &str, q: &str) -> Option<Rank> {
         Query::new(q).rank(name.as_bytes())
+    }
+
+    #[test]
+    fn public_rank_matches() {
+        assert_eq!(rank("steam", b"steamapps"), Some(Rank::Prefix));
+        assert_eq!(rank("", b"x"), None);
     }
 
     #[test]

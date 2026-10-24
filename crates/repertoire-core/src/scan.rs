@@ -16,7 +16,7 @@ use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -66,6 +66,9 @@ pub struct Scanner {
     /// Bytes seen so far, for progress reporting. Shared so a status
     /// request can read it while the walk runs.
     pub progress: Arc<AtomicU64>,
+    /// Set it to stop a walk early (the user navigated away). A cancelled
+    /// walk returns what it has, which is incomplete: discard it.
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl Scanner {
@@ -105,7 +108,14 @@ impl Scanner {
         self.walk(fd, path, name, stat)
     }
 
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
     fn walk(&self, fd: OwnedFd, path: PathBuf, name: Box<[u8]>, stat: Stat) -> ScanDir {
+        if self.is_cancelled() {
+            return unreadable(name, stat);
+        }
         self.progress.fetch_add(stat.bytes, Ordering::Relaxed);
         let handle = self.handle_of.and_then(|f| f(fd.as_fd(), b""));
         let Ok(names) = sys::read_dir(fd.as_fd()) else {

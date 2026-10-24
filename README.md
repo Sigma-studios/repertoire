@@ -133,3 +133,19 @@ The randomized tests (`crates/repertoire-core/tests/events.rs`,
 Albert's settings, then type `f ` and a name. Enter opens; the other actions
 open the containing folder or copy the path. Needs Albert's Python
 interface 5.0 (Albert v35+).
+
+Queries with a slash are paths:
+
+- `f bevy_rues/t`: what's inside folders named `bevy_rues` (anywhere) that
+  matches `t`. Every segment before the last slash is an **exact** folder
+  name (any case), each one directly inside the previous one; only the last
+  segment matches loosely, ranked like a normal search.
+  `f bevy_rues/` lists the folder, largest first.
+- `f ~/Projects/bev` or `f /etc/sys`: a real path, listed from the
+  filesystem (folder totals from the daemon when it runs).
+- Tab on a folder completes it with a slash, to go one level down.
+
+A path query is one search for the first folder and then one listing per
+level, on a single connection: a few milliseconds. For very common first
+names (`src/…`) only the 20 largest such folders are followed; start the
+path one level higher to be specific.

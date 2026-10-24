@@ -164,3 +164,18 @@ fn mount_root_is_named_by_full_path() {
     assert_eq!(tree.node(ROOT).parent, repertoire_core::NONE);
     remove_all(&root).unwrap();
 }
+
+#[test]
+fn a_cancelled_scan_stops_early() {
+    let root = scratch("cancel");
+    for i in 0..200 {
+        write(&root.join(format!("d{i}/f")), 100);
+    }
+    let s = scanner();
+    s.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    let scan = s.scan_root(&root).unwrap();
+    assert!(scan.dirs.is_empty() && scan.files.is_empty(), "nothing walked once cancelled");
+    s.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(s.scan_root(&root).unwrap().dirs.len(), 200);
+    remove_all(&root).unwrap();
+}

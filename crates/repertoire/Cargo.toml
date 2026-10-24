@@ -18,6 +18,7 @@ libc.workspace = true
 rayon.workspace = true
 repertoire-core.workspace = true
 repertoire-proto.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 repertoire-linux.workspace = true

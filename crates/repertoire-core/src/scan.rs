@@ -17,6 +17,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct ScanFile {
@@ -62,8 +63,9 @@ pub struct Scanner {
     /// device (bind mounts would be counted twice).
     pub skip: HashSet<PathBuf>,
     pub handle_of: Option<HandleFn>,
-    /// Bytes seen so far, for progress reporting.
-    pub progress: AtomicU64,
+    /// Bytes seen so far, for progress reporting. Shared so a status
+    /// request can read it while the walk runs.
+    pub progress: Arc<AtomicU64>,
 }
 
 impl Scanner {

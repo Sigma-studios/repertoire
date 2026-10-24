@@ -2,6 +2,8 @@
 //! RNG, and a directory access that plays the part of Linux file handles.
 #![allow(dead_code)]
 
+pub mod world;
+
 use repertoire_core::sys;
 use repertoire_core::{DirAccess, Id, Scanner, Tree, ROOT};
 use std::cell::RefCell;

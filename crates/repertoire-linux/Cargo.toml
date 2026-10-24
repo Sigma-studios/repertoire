@@ -1,0 +1,10 @@
+[package]
+name = "repertoire-linux"
+description = "Linux-only parts of répertoire: fanotify, mount table, I/O priority, file handles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc.workspace = true
+repertoire-core.workspace = true

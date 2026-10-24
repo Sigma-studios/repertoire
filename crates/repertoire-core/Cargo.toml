@@ -1,0 +1,10 @@
+[package]
+name = "repertoire-core"
+description = "Scanner, in-memory size tree, event application and snapshots for répertoire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc.workspace = true
+rayon.workspace = true

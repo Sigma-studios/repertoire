@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy
+      - run: cargo build --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy
+      - run: uname -r
+      - run: cargo build --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets
+      - name: Tests (unprivileged)
+        run: cargo test --workspace
+      - name: Tests as root (fanotify, access control)
+        run: |
+          sudo env "PATH=$PATH" "HOME=$HOME" "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
+            "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" CARGO_TARGET_DIR=target-root \
+            RUSTFLAGS="$RUSTFLAGS" cargo test --workspace

@@ -1,0 +1,59 @@
+# systemd unit for repertoired. Copy to /etc/systemd/system/ (adjust the
+# path to the binary) or translate to a NixOS module.
+#
+# It runs as root because fanotify filesystem marks need CAP_SYS_ADMIN and
+# resolving file handles needs CAP_DAC_READ_SEARCH; it keeps only those two
+# capabilities and can't write anywhere but its state directory.
+[Unit]
+Description=répertoire: live index of disk usage and file names
+Documentation=https://github.com/Sigma-studios/repertoire
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/repertoired --foreground
+Restart=on-failure
+# SIGTERM saves snapshots before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# /run/repertoire/repertoire.sock (mode 0666; answers are filtered per peer uid)
+RuntimeDirectory=repertoire
+RuntimeDirectoryMode=0755
+# /var/lib/repertoire/*.snap
+StateDirectory=repertoire
+StateDirectoryMode=0700
+
+# Background work: the daemon lowers its scan threads itself (nice 19, idle
+# I/O class); this keeps the rest polite too.
+Nice=10
+IOSchedulingClass=idle
+
+# Sandboxing. Each of these was checked not to break fanotify (see
+# docs/HANDOFF.md).
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/repertoire
+ProtectHome=read-only
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service fanotify_init fanotify_mark name_to_handle_at open_by_handle_at ioprio_set
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

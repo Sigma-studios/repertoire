@@ -58,6 +58,7 @@ pub fn parse_mountinfo(text: &str, is_dir: impl Fn(&std::path::Path) -> bool) ->
     let mut all = HashSet::new();
     let mut by_dev: Vec<Filesystem> = Vec::new();
     let mut seen_roots = HashSet::new();
+    let mut mounts_by_dev: Vec<(String, PathBuf, PathBuf)> = Vec::new();
     for line in text.lines() {
         let Some((left, right)) = line.split_once(" - ") else { continue };
         let l: Vec<&str> = left.split(' ').collect();
@@ -86,6 +87,16 @@ pub fn parse_mountinfo(text: &str, is_dir: impl Fn(&std::path::Path) -> bool) ->
         }
         // Bind mounts of the same directory: keep the first.
         if !seen_roots.insert((l[2].to_string(), l[3].to_string())) {
+            continue;
+        }
+        // A directory bound onto its own path (systemd's ReadWritePaths=,
+        // ProtectHome=) is already covered by the mount it lives in.
+        let root = unescape(l[3]);
+        let covered = mounts_by_dev.iter().any(|(dev, r0, m0): &(String, PathBuf, PathBuf)| {
+            dev == l[2] && root.strip_prefix(r0).is_ok_and(|rest| m0.join(rest) == mount) && *m0 != mount
+        });
+        mounts_by_dev.push((l[2].to_string(), root, mount.clone()));
+        if covered {
             continue;
         }
         if let Some(fs) = by_dev.iter_mut().find(|f| f.id == source) {
@@ -127,5 +138,18 @@ mod tests {
         assert_eq!(fss[1].device, "nvme0n1p3");
         assert!(all.contains(&PathBuf::from("/proc")));
         assert!(all.contains(&PathBuf::from("/srv/games")));
+    }
+
+    #[test]
+    fn self_binds_are_not_new_mount_points() {
+        let text = "\
+22 1 259:2 / / ro,relatime shared:1 - ext4 /dev/nvme0n1p2 rw
+40 22 259:2 /var/lib/repertoire /var/lib/repertoire rw - ext4 /dev/nvme0n1p2 rw
+41 22 259:2 /home /home ro - ext4 /dev/nvme0n1p2 rw
+42 22 259:2 /srv/data /mnt/data rw - ext4 /dev/nvme0n1p2 rw
+";
+        let (fss, all) = parse_mountinfo(text, |_| true);
+        assert_eq!(fss[0].mount_points, vec![PathBuf::from("/"), PathBuf::from("/mnt/data")]);
+        assert!(all.contains(&PathBuf::from("/var/lib/repertoire")));
     }
 }

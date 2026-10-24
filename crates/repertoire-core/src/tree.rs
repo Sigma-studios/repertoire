@@ -713,6 +713,11 @@ impl Tree {
             let Some(group) = self.links.get(&key) else { continue };
             if let Some(st) = group.clone().iter().find_map(|&m| restat(self, m).filter(|st| st.ino == key.1)) {
                 self.update_file(group_first(&self.links, key), &st);
+                // Fewer links known than the inode has: a group counted as
+                // complete may have counted a stale copy of a member.
+                if (self.links.get(&key).map_or(0, Vec::len) as u64) < st.nlink {
+                    self.pending_scan.insert(key);
+                }
             }
         }
         if !scan || self.pending_scan.is_empty() {

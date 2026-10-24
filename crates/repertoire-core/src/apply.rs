@@ -267,6 +267,31 @@ impl Tree {
         self.graft(parent, scan, true)
     }
 
+    /// The directory node `x` is the directory now at `name` in `fd`: inode
+    /// numbers are reused at once on ext4, handles carry a generation.
+    /// Files have no recorded handle and always pass.
+    fn same_handle(&self, x: Id, fd: &OwnedFd, name: &[u8], cx: &Ctx) -> bool {
+        let Some(known) = self.dir(x).and_then(|d| d.handle.as_ref()) else { return true };
+        match cx.scanner.handle_of.and_then(|f| f(fd.as_fd(), name)) {
+            Some(now) => *known == now,
+            None => true,
+        }
+    }
+
+    /// Two nodes are copies of one directory. Handles carry the inode's
+    /// generation, so a reused inode number (immediate on ext4) isn't
+    /// mistaken for the same directory; inode numbers are the fallback.
+    fn same_dir(&self, a: Id, b: Id) -> bool {
+        let (na, nb) = (self.node(a), self.node(b));
+        if !na.is_dir() || !nb.is_dir() {
+            return false;
+        }
+        match (self.dir(a).and_then(|d| d.handle.as_ref()), self.dir(b).and_then(|d| d.handle.as_ref())) {
+            (Some(ha), Some(hb)) => ha == hb,
+            _ => na.ino == nb.ino,
+        }
+    }
+
     fn is_dir_id(&self, id: Id) -> bool {
         id != ROOT && self.is_live(id) && self.node(id).is_dir()
     }
@@ -302,7 +327,7 @@ impl Tree {
         };
         if let Some(x) = existing {
             let n = self.node(x);
-            if n.ino == st.ino && n.kind == st.kind() {
+            if n.ino == st.ino && n.kind == st.kind() && self.same_handle(x, fd, name, cx) {
                 if n.kind == Kind::Dir {
                     self.sync_dir(x, &st, cx);
                 } else {
@@ -336,13 +361,13 @@ impl Tree {
                 if let Ok(st) = sys::stat_at(tfd.as_fd(), to_name) {
                     let (ino, kind) = (self.node(x).ino, self.node(x).kind);
                     let there = self.child(to, to_name).filter(|&c| c != x);
-                    if kind == Kind::Dir && there.is_some_and(|c| self.node(c).ino == ino) {
+                    if kind == Kind::Dir && there.is_some_and(|c| self.same_dir(c, x)) {
                         // A scan already indexed it there, more recently.
                         self.remove(x);
                         self.update_dir_from_disk(to, cx);
                         return Outcome::Applied;
                     }
-                    if ino == st.ino && kind == st.kind() && self.move_to(x, to, to_name) {
+                    if ino == st.ino && kind == st.kind() && self.same_handle(x, &tfd, to_name, cx) && self.move_to(x, to, to_name) {
                         if kind == Kind::Dir {
                             self.sync_dir(x, &st, cx);
                         } else {
@@ -363,9 +388,8 @@ impl Tree {
             if let Some(now) = cx.access.locate(self, x) {
                 let parent = now.parent().and_then(|p| self.lookup(p)).filter(|&p| self.is_dir_id(p));
                 if let (Some(p), Some(n)) = (parent, now.file_name()) {
-                    let ino = self.node(x).ino;
                     match self.child(p, n.as_bytes()) {
-                        Some(c) if c != x && self.node(c).ino == ino => self.remove(x), // fresher copy there
+                        Some(c) if c != x && self.same_dir(c, x) => self.remove(x), // fresher copy there
                         _ => {
                             self.move_to(x, p, n.as_bytes());
                         }

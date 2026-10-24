@@ -313,9 +313,11 @@ fn search(shared: &Shared, viewer: &Viewer, query: &str, under: Option<PathBuf>,
     Ok(Response::Search { results })
 }
 
-pub fn fs_state(fs: &Fs, phase: Phase, used: u64) -> p::FsState {
+/// `expected`: what the scan should end up seeing (the previous index's
+/// total when there is one, else the filesystem's used space).
+pub fn fs_state(fs: &Fs, phase: Phase, expected: u64) -> p::FsState {
     let seen = fs.scanner.progress.load(Ordering::Relaxed);
-    let progress = if used == 0 { 0.0 } else { (seen as f64 / used as f64).min(1.0) as f32 };
+    let progress = if expected == 0 { 0.0 } else { (seen as f64 / expected as f64).min(1.0) as f32 };
     match phase {
         Phase::Scanning => p::FsState::Scanning { progress, bytes_seen: seen },
         Phase::Reconciling => p::FsState::Reconciling { progress, bytes_seen: seen },
@@ -329,6 +331,12 @@ pub fn fs_info(fs: &Fs) -> p::FsInfo {
     let (total, used) = repertoire_core::sys::space(&fs.fs.mount_points[0]).unwrap_or((0, 0));
     let ix = fs.index.read().unwrap();
     let root = ix.tree.dir(ROOT).cloned().unwrap_or_default();
+    // A directory indexed on request doesn't own its volume's used space.
+    let expected = match () {
+        _ if root.total > 0 => root.total,
+        _ if fs.fs.fs_type == "dir" => 0,
+        _ => used,
+    };
     p::FsInfo {
         id: fs.fs.id.clone(),
         device: fs.fs.device.clone(),
@@ -340,7 +348,7 @@ pub fn fs_info(fs: &Fs) -> p::FsInfo {
         files: root.files,
         // The mount nodes themselves are directories too.
         dirs: root.dirs,
-        state: fs_state(fs, ix.phase, used),
+        state: fs_state(fs, ix.phase, expected),
         last_full_scan: ix.last_full_scan.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64),
     }
 }

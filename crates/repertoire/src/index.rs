@@ -74,7 +74,11 @@ pub struct Fs {
 impl Fs {
     pub fn new(shared: &Shared, fs: Filesystem) -> Fs {
         let mounts = shared.mounts.read().unwrap();
-        let skip = mounts.iter().filter(|m| !fs.mount_points.contains(m)).cloned().collect();
+        // Every mount point, our own included: each of our mount points is
+        // scanned as its own root (a walk starts at a root it never skips),
+        // so a bind mount of the same filesystem below another one (as
+        // systemd's ProtectHome= makes) isn't walked twice.
+        let skip = mounts.iter().cloned().collect();
         let scanner = Scanner {
             excludes: shared.config.excludes.clone(),
             skip,

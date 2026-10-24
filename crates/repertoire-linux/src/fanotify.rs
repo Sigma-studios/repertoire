@@ -217,19 +217,23 @@ pub fn translate(ev: &KernelEvent, out: &mut Vec<(Option<[u8; 8]>, RawEvent)>) {
     }
     match (ev.dfid, ev.fid) {
         (Some(d), _) if d.name.is_some_and(|n| !n.is_empty() && n != b".") => {
+            // The kernel merges what happened to one entry while the event
+            // sat in the queue (create + modify + close_write). Applying
+            // re-stats the entry as it is now, so one event is enough; only
+            // a bare modify is debounced (more writes are likely coming).
             let (dir, name, fs) = (b(d.handle), b(d.name.unwrap()), Some(d.fsid));
-            if ev.mask & FAN_CREATE != 0 {
-                out.push((fs, RawEvent::Created { dir: dir.clone(), name: name.clone() }));
-            }
-            if ev.mask & FAN_DELETE != 0 {
-                out.push((fs, RawEvent::Removed { dir: dir.clone(), name: name.clone() }));
-            }
-            if ev.mask & FAN_MODIFY != 0 {
-                out.push((fs, RawEvent::Modified { dir: dir.clone(), name: name.clone(), obj: obj.clone() }));
-            }
-            if ev.mask & (FAN_ATTRIB | FAN_CLOSE_WRITE) != 0 {
-                out.push((fs, RawEvent::Attrib { dir, name, obj }));
-            }
+            let ev = if ev.mask & FAN_CREATE != 0 {
+                RawEvent::Created { dir, name }
+            } else if ev.mask & FAN_DELETE != 0 {
+                RawEvent::Removed { dir, name }
+            } else if ev.mask & (FAN_ATTRIB | FAN_CLOSE_WRITE) != 0 {
+                RawEvent::Attrib { dir, name, obj }
+            } else if ev.mask & FAN_MODIFY != 0 {
+                RawEvent::Modified { dir, name, obj }
+            } else {
+                return;
+            };
+            out.push((fs, ev));
         }
         // An event on a directory itself (a mount root has no parent).
         (Some(d), _) if ev.mask & (FAN_ATTRIB | FAN_MODIFY | FAN_CLOSE_WRITE | FAN_DELETE_SELF | FAN_MOVE_SELF) != 0 => {

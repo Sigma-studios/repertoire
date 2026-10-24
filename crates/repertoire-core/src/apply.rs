@@ -231,10 +231,12 @@ impl Tree {
 
     /// [`Tree::flush_links`], re-stat'ing members through `cx`.
     pub fn flush_links_with(&mut self, cx: &Ctx) {
-        self.flush_links(&|tree, id| {
-            let fd = cx.access.open(tree, tree.node(id).parent).ok()?;
-            sys::stat_at(fd.as_fd(), &tree.node(id).name).ok()
-        });
+        self.flush_links(&|tree, id| restat(tree, id, cx), true);
+    }
+
+    /// Only the cheap part of [`Tree::flush_links_with`]: known groups.
+    pub fn flush_links_quick(&mut self, cx: &Ctx) {
+        self.flush_links(&|tree, id| restat(tree, id, cx), false);
     }
 
     fn update_dir_from_disk(&mut self, dir: Id, cx: &Ctx) {
@@ -379,6 +381,11 @@ impl Tree {
             Outcome::Ignored
         }
     }
+}
+
+fn restat(tree: &Tree, id: Id, cx: &Ctx) -> Option<Stat> {
+    let fd = cx.access.open(tree, tree.node(id).parent).ok()?;
+    sys::stat_at(fd.as_fd(), &tree.node(id).name).ok()
 }
 
 /// Path of `name` inside the directory `dir` of `tree`.

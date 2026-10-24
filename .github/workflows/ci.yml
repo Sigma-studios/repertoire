@@ -17,6 +17,8 @@ jobs:
       - run: cargo build --workspace --all-targets
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+      - name: Albert plugin
+        run: python3 -m unittest discover -s albert/tests
 
   linux:
     runs-on: ubuntu-latest
@@ -28,6 +30,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - name: Tests (unprivileged)
         run: cargo test --workspace
+      - name: Albert plugin
+        run: python3 -m unittest discover -s albert/tests
       - name: Tests as root (fanotify, access control)
         run: |
           sudo env "PATH=$PATH" "HOME=$HOME" "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \

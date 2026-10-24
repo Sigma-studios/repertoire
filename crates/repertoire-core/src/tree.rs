@@ -96,6 +96,10 @@ pub struct Dir {
 /// Hard-link group key: (device, inode).
 type LinkKey = (u64, u64);
 
+fn group_first(links: &HashMap<LinkKey, Vec<Id>>, key: LinkKey) -> Id {
+    links[&key][0]
+}
+
 #[derive(Clone, Default)]
 pub struct Tree {
     nodes: Vec<Node>,
@@ -105,9 +109,12 @@ pub struct Tree {
     handles: HashMap<Box<[u8]>, Id>,
     /// Members of each group; the charged one is flagged, not positional.
     links: HashMap<LinkKey, Vec<Id>>,
-    /// Groups that may be missing members that were indexed before the
-    /// link was made. Resolved in one pass by [`Tree::flush_links`].
-    pending_links: HashSet<LinkKey>,
+    /// Groups that may be missing members indexed before the link was
+    /// made: found by one pass over the arena in [`Tree::flush_links`].
+    pending_scan: HashSet<LinkKey>,
+    /// Groups whose known members should be stat'ed again (one of their
+    /// links went away, and the inode may have changed through it).
+    pending_restat: HashSet<LinkKey>,
     /// Older copies of directories a graft just found elsewhere.
     stale: Vec<Id>,
     /// Set when the tree got into a state only a rescan can sort out.
@@ -406,9 +413,13 @@ impl Tree {
             let group = self.links.entry(key).or_default();
             let flags = if group.is_empty() { LINKED | CHARGED } else { LINKED };
             group.push(id);
+            let complete = group.len() as u64 >= st.nlink;
             self.nodes[id as usize].flags = flags;
-            if flags & CHARGED != 0 && pending {
-                self.pending_links.insert(key);
+            if complete {
+                // Every link is known: nothing to look for.
+                self.pending_scan.remove(&key);
+            } else if flags & CHARGED != 0 && pending {
+                self.pending_scan.insert(key);
             }
         }
         id
@@ -533,14 +544,16 @@ impl Tree {
             if let Some(group) = self.links.get_mut(&key) {
                 group.retain(|&m| m != x);
                 // The inode may have been written through the link that's
-                // going away, and links indexed before they became links
-                // may not be in the group yet: look for survivors and
-                // re-stat them.
-                self.pending_links.insert(key);
+                // going away: re-stat the survivors. (An incomplete group
+                // stays queued for a scan, which also finds links indexed
+                // before they became links.)
                 if group.is_empty() {
                     self.links.remove(&key);
-                } else if charged {
-                    orphaned.push(key);
+                } else {
+                    self.pending_restat.insert(key);
+                    if charged {
+                        orphaned.push(key);
+                    }
                 }
             }
         }
@@ -601,7 +614,11 @@ impl Tree {
             let group = self.links.entry(key).or_default();
             let f = if group.is_empty() { LINKED | CHARGED } else { LINKED };
             group.push(id);
-            self.pending_links.insert(key);
+            if group.len() as u64 >= st.nlink {
+                self.pending_scan.remove(&key);
+            } else {
+                self.pending_scan.insert(key);
+            }
             let bytes = self.nodes[id as usize].bytes;
             self.set_file(id, f, bytes);
             self.links[&key].clone()
@@ -671,12 +688,17 @@ impl Tree {
         } else if let Some(&first) = self.links.get(&key).and_then(|g| g.first()) {
             self.update_file(first, st);
         } else if st.nlink > 1 {
-            self.pending_links.insert(key);
+            self.pending_scan.insert(key);
         }
     }
 
     pub fn has_pending_links(&self) -> bool {
-        !self.pending_links.is_empty()
+        !self.pending_scan.is_empty() || !self.pending_restat.is_empty()
+    }
+
+    /// Some group needs the (linear) arena pass.
+    pub fn has_pending_scan(&self) -> bool {
+        !self.pending_scan.is_empty()
     }
 
     /// Complete hard-link groups created by events: a new link to a file
@@ -684,11 +706,19 @@ impl Tree {
     /// handles every pending group at once. The members may have drifted
     /// apart while they weren't grouped, so the inode is stat'ed again
     /// through `restat` (any member will do) and every member takes that.
-    pub fn flush_links(&mut self, restat: &dyn Fn(&Tree, Id) -> Option<Stat>) {
-        if self.pending_links.is_empty() {
+    ///
+    /// With `scan` false only the cheap part runs: re-stat'ing known groups.
+    pub fn flush_links(&mut self, restat: &dyn Fn(&Tree, Id) -> Option<Stat>, scan: bool) {
+        for key in std::mem::take(&mut self.pending_restat) {
+            let Some(group) = self.links.get(&key) else { continue };
+            if let Some(st) = group.clone().iter().find_map(|&m| restat(self, m).filter(|st| st.ino == key.1)) {
+                self.update_file(group_first(&self.links, key), &st);
+            }
+        }
+        if !scan || self.pending_scan.is_empty() {
             return;
         }
-        let keys = std::mem::take(&mut self.pending_links);
+        let keys = std::mem::take(&mut self.pending_scan);
         let inos: HashSet<u64> = keys.iter().map(|k| k.1).collect();
         let mut found: HashMap<LinkKey, Vec<Id>> = HashMap::new();
         for (i, n) in self.nodes.iter().enumerate() {
@@ -755,7 +785,7 @@ impl Tree {
                 seen_links.insert(m);
             }
         }
-        if !self.pending_links.is_empty() {
+        if self.has_pending_links() {
             return Err("pending hard links not flushed".into());
         }
         for (h, &id) in &self.handles {

@@ -13,7 +13,6 @@ use crate::info;
 use repertoire_core::debounce::Debouncer;
 use repertoire_core::{Outcome, RawEvent};
 use repertoire_linux::fanotify::{parse, translate, Fanotify};
-use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::sync::atomic::Ordering;
@@ -22,6 +21,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 type Batch = Vec<(Option<[u8; 8]>, RawEvent)>;
+
+/// Longest a newly linked file may count twice while busy.
+const LINK_SCAN_EVERY: Duration = Duration::from_secs(10);
+
+/// Pause between reads when the queue isn't full.
+const READ_PACE: Duration = Duration::from_millis(100);
 
 /// Set up fanotify and its marks, then start the reader and applier.
 /// Called before any scan.
@@ -81,6 +86,13 @@ pub fn start(shared: &Arc<Shared>) -> io::Result<()> {
                 if tx.send(batch).is_err() {
                     return;
                 }
+                // Let events pile up a little: the kernel merges repeated
+                // events for the same file while they're queued, so a build
+                // writing a file in many small writes costs one event, not
+                // thousands. Keep reading at once if the queue was full.
+                if n < buf.len() / 2 {
+                    std::thread::sleep(READ_PACE);
+                }
             }
         })?;
     let applier_shared = shared.clone();
@@ -101,9 +113,14 @@ pub fn mark(shared: &Shared, fs: &Fs) {
 }
 
 fn apply_loop(shared: &Shared, rx: Receiver<Batch>) {
-    let mut debouncer: Debouncer<(String, RawEvent)> = Debouncer::new(shared.config.quiet, shared.config.max_delay);
-    let mut last_flush: HashMap<String, Instant> = HashMap::new();
+    // Keyed by position in the filesystem list, which only changes when
+    // filesystems come or go (then pending keys are dropped).
+    let mut debouncer: Debouncer<(usize, RawEvent)> = Debouncer::new(shared.config.quiet, shared.config.max_delay);
+    let mut fss = shared.filesystems();
+    let mut last_due = Instant::now();
+    let mut last_scan_flush = Instant::now();
     let mut warned_fsid = false;
+    let mut stats = Stats::default();
     loop {
         let now = Instant::now();
         let wait = debouncer.next_due().map_or(Duration::from_secs(1), |t| t.saturating_duration_since(now)).min(Duration::from_secs(1));
@@ -118,17 +135,21 @@ fn apply_loop(shared: &Shared, rx: Receiver<Batch>) {
                 Err(_) => break,
             }
         }
+        let idle = batch.is_empty();
 
-        let fss = shared.filesystems();
-        let by_fsid = |fsid: &[u8; 8]| fss.iter().find(|f| f.fsid.as_ref() == Some(fsid));
-        let mut todo: HashMap<String, (Arc<Fs>, Vec<RawEvent>)> = HashMap::new();
+        let current = shared.filesystems();
+        if current.len() != fss.len() || current.iter().zip(&fss).any(|(a, b)| !Arc::ptr_eq(a, b)) {
+            fss = current;
+            debouncer.drain();
+        }
+        let mut todo: Vec<Vec<RawEvent>> = vec![Vec::new(); fss.len()];
         let now = Instant::now();
         for (fsid, ev) in batch {
             let Some(fsid) = fsid else {
                 overflow(shared, &fss);
                 continue;
             };
-            let Some(fs) = by_fsid(&fsid) else {
+            let Some(i) = fss.iter().position(|f| f.fsid.as_ref() == Some(&fsid)) else {
                 if !warned_fsid {
                     warned_fsid = true;
                     shared.debug(format!("events for unknown fsid {fsid:02x?} ignored"));
@@ -136,36 +157,45 @@ fn apply_loop(shared: &Shared, rx: Receiver<Batch>) {
                 continue;
             };
             if matches!(ev, RawEvent::Modified { .. }) {
-                debouncer.touch((fs.id().to_string(), ev), now);
+                debouncer.touch((i, ev), now);
             } else {
-                todo.entry(fs.id().to_string()).or_insert_with(|| (fs.clone(), Vec::new())).1.push(ev);
+                todo[i].push(ev);
             }
         }
-        for (id, ev) in debouncer.due(now) {
-            if let Some(fs) = fss.iter().find(|f| f.id() == id) {
-                todo.entry(id).or_insert_with(|| (fs.clone(), Vec::new())).1.push(ev);
+        // Checking every pending key costs; a few times a second is plenty.
+        if idle || now.duration_since(last_due) >= Duration::from_millis(50) {
+            last_due = now;
+            for (i, ev) in debouncer.due(now) {
+                todo[i].push(ev);
             }
         }
         shared.activity.pending.store(debouncer.len(), Ordering::Relaxed);
+        stats.routing += now.elapsed();
 
         let mut changed = false;
-        for (id, (fs, events)) in todo {
-            changed = true;
-            let flush = last_flush.get(&id).is_none_or(|t| t.elapsed() >= Duration::from_millis(250)) || debouncer.is_empty();
-            if apply(fs.as_ref(), &events, flush) {
-                request_scan(shared, &fs, Speed::Idle);
+        for (i, events) in todo.into_iter().enumerate() {
+            if events.is_empty() {
+                continue;
             }
-            if flush {
-                last_flush.insert(id, Instant::now());
+            changed = true;
+            stats.events += events.len() as u64;
+            if apply(&fss[i], &events, &mut stats) {
+                request_scan(shared, &fss[i], Speed::Idle);
             }
         }
-        // Hard-link groups left pending by a rate-limited flush.
-        if debouncer.is_empty() {
+        // Finding links made to files indexed before they were links takes
+        // a pass over every entry: at most every 10 s, or once things calm
+        // down. Until then such a file may count twice.
+        if (idle && debouncer.is_empty()) || last_scan_flush.elapsed() >= LINK_SCAN_EVERY {
+            last_scan_flush = Instant::now();
             for fs in &fss {
                 let mut ix = fs.index.write().unwrap();
                 if ix.tree.has_pending_links() {
                     let ix = &mut *ix;
+                    let t = Instant::now();
                     fs.with_ctx(|cx| ix.tree.flush_links_with(cx));
+                    stats.flush += t.elapsed();
+                    stats.flushes += 1;
                     changed = true;
                 }
             }
@@ -173,25 +203,56 @@ fn apply_loop(shared: &Shared, rx: Receiver<Batch>) {
         if changed {
             shared.changes.bump();
         }
+        if shared.config.verbose && stats.since.elapsed() >= Duration::from_secs(10) {
+            shared.debug(format!(
+                "last {:.0?}: {} kernel events, {} applied in {:.0?} (+ routing {:.0?}), {} link scans in {:.0?}, {} pending",
+                stats.since.elapsed(),
+                shared.activity.events.load(Ordering::Relaxed) - stats.kernel_events,
+                stats.events,
+                stats.apply,
+                stats.routing,
+                stats.flushes,
+                stats.flush,
+                debouncer.len()
+            ));
+            stats = Stats { kernel_events: shared.activity.events.load(Ordering::Relaxed), ..Stats::default() };
+        }
+    }
+}
+
+struct Stats {
+    since: Instant,
+    kernel_events: u64,
+    events: u64,
+    apply: Duration,
+    routing: Duration,
+    flush: Duration,
+    flushes: u64,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Stats { since: Instant::now(), kernel_events: 0, events: 0, apply: Duration::ZERO, routing: Duration::ZERO, flush: Duration::ZERO, flushes: 0 }
     }
 }
 
 /// Apply a batch to one filesystem under its lock. True if the tree asks
 /// for a rescan.
-fn apply(fs: &Fs, events: &[RawEvent], flush: bool) -> bool {
+fn apply(fs: &Fs, events: &[RawEvent], stats: &mut Stats) -> bool {
     let mut guard = fs.index.write().unwrap();
     let ix = &mut *guard;
     let mut rescan = false;
     fs.with_ctx(|cx| {
+        let t = Instant::now();
         for ev in events {
             rescan |= ix.tree.apply_raw(ev, cx) == Outcome::Rescan;
             if let Some(r) = &mut ix.replay {
                 r.push(ev);
             }
         }
-        if flush {
-            ix.tree.flush_links_with(cx);
-        }
+        // Re-stat groups that lost a link: cheap, keeps sizes right.
+        ix.tree.flush_links_quick(cx);
+        stats.apply += t.elapsed();
     });
     rescan
 }

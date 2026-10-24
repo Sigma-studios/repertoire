@@ -140,7 +140,8 @@ impl Fs {
                 }
                 p
             };
-            return f(&Ctx { scanner: &self.scanner, access, handle_path: &path_of });
+            let batch = repertoire_linux::access::BatchAccess::new(access);
+            return f(&Ctx { scanner: &self.scanner, access: &batch, handle_path: &path_of });
         }
         let none = |_: &[u8]| None;
         f(&Ctx { scanner: &self.scanner, access: &ByPath, handle_path: &none })

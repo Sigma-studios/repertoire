@@ -199,6 +199,13 @@ fn full_scan(shared: &Shared, fs: &Arc<Fs>, pool: &rayon::ThreadPool) {
         (ix.tree.len(), ix.tree.size(ROOT), replay.events.len(), again)
     };
     shared.changes.bump();
+    // The old tree and the scan's scratch data are gone; give the memory
+    // back instead of keeping it in glibc's per-thread arenas.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim has no preconditions.
+    unsafe {
+        libc::malloc_trim(0);
+    }
     info(format!(
         "{}: scanned {entries} entries, {} MiB, in {scanned_in:.2?}; replayed {replayed} events",
         fs.id(),

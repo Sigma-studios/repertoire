@@ -32,6 +32,9 @@ struct Opts {
 }
 
 fn main() {
+    // Exit quietly when the reader of our output goes away (`| head`).
+    // SAFETY: restoring the default disposition of one signal.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut opts = Opts { json: false, socket: None };
     while let Some(a) = args.first() {
@@ -179,7 +182,7 @@ fn status(opts: &Opts) -> Res {
         println!();
         println!("{}  {} · {}", mounts.join("  "), fs.device, fs.fs_type);
         println!("  {} used of {}, {} indexed in {} files and {} folders", size(fs.used), size(fs.total), size(fs.indexed), fs.files, fs.dirs);
-        if fs.used > fs.indexed {
+        if fs.used > fs.indexed && fs.fs_type != "dir" {
             println!("  {} not attributable (unreadable folders, filesystem metadata)", size(fs.used - fs.indexed));
         }
         let ago = fs.last_full_scan.map(|t| {
@@ -350,9 +353,10 @@ fn scan(rest: &[String]) -> Res {
     let total = t.elapsed();
     let d = tree.dir(mount).unwrap();
     println!(
-        "{}: {} in {} files and {} folders",
+        "{}: {} ({} bytes) in {} files and {} folders",
         path.display(),
         size(d.total),
+        d.total,
         d.files,
         d.dirs + 1
     );

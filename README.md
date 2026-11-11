@@ -63,8 +63,14 @@ everything), `--state-dir DIR` / `--no-state`, `--socket PATH`, `--no-watch`,
   directory, never crossing into another mount. Sizes are allocated bytes
   (`st_blocks × 512`), so sparse files count what they really use; hard
   links count once. The first scan uses every core; later ones run on two
-  threads at `nice 19` and idle I/O priority. Each directory's file handle
-  is recorded on the way.
+  threads at `nice 19` and idle I/O priority, and give way to other disk
+  reads: NVMe drives usually run the `none` I/O scheduler, which ignores I/O
+  priority, so a rescan at boot would otherwise compete at full strength with
+  the login it overlaps. A background scan first waits for the disk to be
+  quiet for 5 s (2 minutes at most), then pauses 10 ms before each directory
+  while other programs read more than 4 MiB/s. It slows down but never stops,
+  so it finishes even on a disk that's never idle. `--no-yield` turns this
+  off. Each directory's file handle is recorded on the way.
 - **Index.** One arena per filesystem: about 100–140 bytes per entry
   (names included). Every change is applied as a delta up the parent chain,
   so totals never need recomputing.

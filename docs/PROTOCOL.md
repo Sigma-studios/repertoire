@@ -198,8 +198,9 @@ file's bytes. A search over half a million names takes a few milliseconds.
 
 ### Rescan
 
-Start an idle-priority full scan. The current numbers keep being served
-(state `reconciling`) until it's done.
+Start an idle-priority full scan. It waits for other disk reads to settle
+(2 minutes at most) and slows down while they go on. The current numbers keep
+being served (state `reconciling`) until it's done.
 
 ```json
 → {"v":1,"type":"Rescan","fs_id":"/dev/nvme0n1p2"}

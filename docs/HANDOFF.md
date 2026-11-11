@@ -167,7 +167,9 @@ the kernel's dentry and inode cache, which the scan fills. It's reclaimable.
    warm, longer cold.
 4. **Games don't stutter during a rescan**: start a game, run `repertoire
    rescan`, watch frame times. Scan threads are at nice 19 and idle I/O
-   class.
+   class, and pause while other programs read from disk (the journal says
+   `waited … for other disk reads to settle` and `paused 10ms before N
+   directories`).
 5. **CPU during a big build**: `systemctl show repertoire -p CPUUsageNSec`
    before and after a large `cargo build`; divide by the build's wall time.
    Expect under 1%.

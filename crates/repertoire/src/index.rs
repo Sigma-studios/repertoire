@@ -84,6 +84,10 @@ impl Fs {
             skip,
             #[cfg(target_os = "linux")]
             handle_of: Some(repertoire_linux::handle::handle_at),
+            pace: Some({
+                let pacer = shared.pacer.clone();
+                Arc::new(move || pacer.pace())
+            }),
             ..Scanner::default()
         };
         #[cfg(target_os = "linux")]
@@ -214,6 +218,8 @@ pub struct Shared {
     pub watching: AtomicBool,
     pub activity: Activity,
     pub stop: AtomicBool,
+    /// Makes background scans give way to other disk reads.
+    pub pacer: Arc<crate::pace::Pacer>,
     /// Test hook: stop reading kernel events (to force an overflow).
     pub pause_reader: AtomicBool,
     #[cfg(target_os = "linux")]
@@ -223,6 +229,7 @@ pub struct Shared {
 impl Shared {
     pub fn new(config: Config) -> Shared {
         Shared {
+            pacer: Arc::new(crate::pace::Pacer::new(config.yield_to_disk)),
             config,
             filesystems: RwLock::new(Vec::new()),
             mounts: RwLock::new(HashSet::new()),

@@ -69,6 +69,9 @@ pub struct Scanner {
     /// Set it to stop a walk early (the user navigated away). A cancelled
     /// walk returns what it has, which is incomplete: discard it.
     pub cancel: Arc<AtomicBool>,
+    /// Called before each directory is read, from the walking thread. It may
+    /// sleep, to make a background walk give way to other disk reads.
+    pub pace: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Scanner {
@@ -115,6 +118,9 @@ impl Scanner {
     fn walk(&self, fd: OwnedFd, path: PathBuf, name: Box<[u8]>, stat: Stat) -> ScanDir {
         if self.is_cancelled() {
             return unreadable(name, stat);
+        }
+        if let Some(pace) = &self.pace {
+            pace();
         }
         self.progress.fetch_add(stat.bytes, Ordering::Relaxed);
         let handle = self.handle_of.and_then(|f| f(fd.as_fd(), b""));

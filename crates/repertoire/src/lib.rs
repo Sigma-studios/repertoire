@@ -5,6 +5,7 @@ pub mod config;
 pub mod engine;
 pub mod handlers;
 pub mod index;
+pub mod pace;
 pub mod server;
 #[cfg(target_os = "linux")]
 pub mod watch;

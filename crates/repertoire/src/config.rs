@@ -28,6 +28,9 @@ pub struct Config {
     pub rescan_every: Duration,
     /// Threads for background (idle priority) scans.
     pub idle_threads: usize,
+    /// Background scans wait for, and slow down for, other disk reads (see
+    /// `pace`). Off in tests, where the build itself keeps the disk busy.
+    pub yield_to_disk: bool,
 }
 
 impl Default for Config {
@@ -45,6 +48,7 @@ impl Default for Config {
             snapshot_every: Duration::from_secs(5 * 60),
             rescan_every: Duration::from_secs(20 * 60),
             idle_threads: 2,
+            yield_to_disk: true,
         }
     }
 }

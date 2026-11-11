@@ -33,6 +33,7 @@ fn start(root: &Path, state: &Path, socket: &Path) -> Daemon {
         state_dir: Some(state.to_path_buf()),
         socket: Some(socket.to_path_buf()),
         watch: false,
+        yield_to_disk: false,
         ..Config::default()
     };
     let d = Daemon::start(config).unwrap();
@@ -189,6 +190,7 @@ fn restart_serves_the_snapshot_first() {
         socket: None,
         watch: false,
         idle_threads: 1,
+        yield_to_disk: false,
         ..Config::default()
     };
     let d2 = Daemon::start(config).unwrap();
@@ -208,7 +210,7 @@ fn restart_serves_the_snapshot_first() {
     let mid = bytes.len() / 2;
     bytes[mid] ^= 0x55;
     fs::write(&snap, bytes).unwrap();
-    let config = Config { roots: vec![root.clone()], state_dir: Some(state.clone()), socket: None, watch: false, ..Config::default() };
+    let config = Config { roots: vec![root.clone()], state_dir: Some(state.clone()), socket: None, watch: false, yield_to_disk: false, ..Config::default() };
     let d3 = Daemon::start(config).unwrap();
     let fs = d3.shared.filesystems()[0].clone();
     assert!(d3.wait_idle(Duration::from_millis(50), Duration::from_secs(30)));

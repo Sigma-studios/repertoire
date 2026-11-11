@@ -23,6 +23,7 @@ fn daemon(root: &Path, unlimited_queue: bool) -> Daemon {
         max_delay: Duration::from_secs(1),
         unlimited_queue,
         verbose: true,
+        yield_to_disk: false,
         ..Config::default()
     };
     let d = Daemon::start(config).unwrap();
@@ -142,7 +143,7 @@ fn other_users_cannot_see_names_in_a_private_home() {
         fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let socket = base.join("s.sock");
-    let config = Config { roots: vec![root.clone()], state_dir: None, socket: Some(socket.clone()), ..Config::default() };
+    let config = Config { roots: vec![root.clone()], state_dir: None, socket: Some(socket.clone()), yield_to_disk: false, ..Config::default() };
     let d = Daemon::start(config).unwrap();
     assert!(d.wait_idle(Duration::from_millis(300), Duration::from_secs(60)));
 

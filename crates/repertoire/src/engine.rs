@@ -21,8 +21,8 @@ use std::time::{Duration, Instant, SystemTime};
 pub enum Speed {
     /// Every core, normal priority: the very first scan, nothing to show yet.
     Fast,
-    /// A few threads at idle CPU and I/O priority: must not make a game
-    /// stutter.
+    /// A few threads at idle CPU and I/O priority, giving way to other disk
+    /// reads (see `pace`): must not make a game stutter or a login drag.
     Idle,
 }
 
@@ -140,7 +140,27 @@ pub fn spawn_scanner(shared: Arc<Shared>) {
                 };
                 let (fs, speed) = job;
                 fs.queued.store(false, Ordering::Relaxed);
-                full_scan(&shared, &fs, if speed == Speed::Fast { &fast } else { &idle });
+                let background = speed == Speed::Idle;
+                if background {
+                    // Not over a login or a game loading: wait for the disk
+                    // to quiet down (bounded), then go slow while others read.
+                    let waited = shared.pacer.wait_for_quiet(&shared.stop);
+                    if shared.stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if waited >= Duration::from_secs(1) {
+                        info(format!("{}: waited {waited:.0?} for other disk reads to settle", fs.id()));
+                    }
+                    shared.pacer.set_active(true);
+                }
+                full_scan(&shared, &fs, if background { &idle } else { &fast });
+                if background {
+                    shared.pacer.set_active(false);
+                    let (paused, each) = shared.pacer.paused();
+                    if paused > 0 {
+                        info(format!("{}: paused {each:?} before {paused} directories while other programs read from disk", fs.id()));
+                    }
+                }
                 shared.activity.scans.fetch_sub(1, Ordering::Relaxed);
             }
         })

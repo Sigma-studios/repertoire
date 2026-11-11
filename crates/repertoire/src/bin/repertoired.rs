@@ -16,6 +16,8 @@ OPTIONS:
     --no-state              Don't save or load snapshots
     --socket <PATH>         Listen here (default /run/repertoire/repertoire.sock)
     --no-watch              Scan only, then rescan every 20 minutes (no fanotify)
+    --no-yield              Background scans don't wait or slow down while
+                            other programs read from disk
     --foreground            Accepted for compatibility; always in the foreground
     -v, --verbose           Log more
     -h, --help              Show this help
@@ -38,6 +40,7 @@ fn main() {
             "--no-state" => config.state_dir = None,
             "--socket" => config.socket = Some(PathBuf::from(need(args.next(), "--socket"))),
             "--no-watch" => config.watch = false,
+            "--no-yield" => config.yield_to_disk = false,
             "--foreground" => {}
             "-v" | "--verbose" => config.verbose = true,
             "-h" | "--help" => {
